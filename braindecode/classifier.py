@@ -7,6 +7,7 @@
 # License: BSD (3-clause)
 
 import warnings
+import numpy as np
 
 from skorch import NeuralNet
 from skorch.callbacks import EpochScoring
@@ -167,6 +168,19 @@ class EEGClassifier(_EEGNeuralNet, NeuralNetClassifier):
         loss : float
             The loss value.
         """
+        # --- FIX 1: handle empty / too-small batches explicitly ---
+        # If the current batch has no samples, most loss functions will fail
+        # with an obscure shape error. Raise a clear, user-facing error instead.
+        if hasattr(y_pred, "numel") and hasattr(y_true, "numel"):
+            if y_pred.numel() == 0 or y_true.numel() == 0:
+                raise ValueError(
+                    "EEGClassifier received an empty batch when computing the loss. "
+                    "This usually indicates that the training dataset or current "
+                    "split is too small to form at least one batch. Please ensure "
+                    "that the training set contains enough samples, or reduce "
+                    "`batch_size` / adjust your train/validation split."
+                )
+
         return NeuralNet.get_loss(self, y_pred, y_true, *args, **kwargs)
 
     def predict(self, X):
@@ -192,7 +206,40 @@ class EEGClassifier(_EEGNeuralNet, NeuralNetClassifier):
         -------
         y_pred : numpy ndarray
         """
-        return self.predict_proba(X).argmax(1)
+        # --- FIX 2: make sure class labels are consistent and limited
+        # with what EEGClassifier / skorch inferred as self.classes_.
+        y_proba = self.predict_proba(X)
+
+        # For classification, y_proba is expected to be (n_samples, n_classes)
+        # after any cropping aggregation. Guard against mismatches that
+        # could create "extra" or out-of-scope classes.
+        if y_proba.ndim != 2:
+            raise RuntimeError(
+                f"EEGClassifier.predict expected a 2D array of shape "
+                f"(n_samples, n_classes) after probability prediction, "
+                f"but got array with shape {y_proba.shape}. This may indicate "
+                f"a problem with the network output or aggregation."
+            )
+
+        n_classes_out = y_proba.shape[1]
+
+        # If classes_ are known (standard skorch behavior), ensure that the
+        # network output matches the number of classes and map argmax indices
+        # back through classes_. This prevents spurious label values.
+        if hasattr(self, "classes_") and self.classes_ is not None:
+            if len(self.classes_) != n_classes_out:
+                raise RuntimeError(
+                    f"Mismatch between network output dimension ({n_classes_out}) "
+                    f"and number of classes ({len(self.classes_)}). "
+                    f"Check your labels and the model's final layer size. For "
+                    f"binary classification, ensure the module has exactly "
+                    f"{len(self.classes_)} output units."
+                )
+            indices = np.argmax(y_proba, axis=1)
+            return self.classes_[indices]
+        else:
+            # Fallback: behave as before (indices 0..n_classes-1)
+            return np.argmax(y_proba, axis=1)
 
     def predict_trials(self, X, return_targets=True):
         """Create trialwise predictions and optionally also return trialwise.
