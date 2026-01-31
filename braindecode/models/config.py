@@ -14,10 +14,19 @@ pydantic = _soft_import(name="pydantic", purpose="model configuration", strict=F
 
 try:
     from numpydantic import NDArray, Shape
+    _HAS_NUMPYDANTIC = True
 except ImportError:
     # we can't use soft import for numpydantic because numpydantic does not define its version in __init__
     NDArray = Any  # type: ignore
     Shape = Any  # type: ignore
+    _HAS_NUMPYDANTIC = False
+
+
+# Safe alias for channel location type to avoid subscripting Any on Python 3.12+
+if _HAS_NUMPYDANTIC:
+    LocType = NDArray[Shape["12"], np.float64]
+else:
+    LocType = np.ndarray
 
 
 class ChsInfoType(TypedDict, total=False, closed=True):  # type: ignore[call-arg]
@@ -26,7 +35,7 @@ class ChsInfoType(TypedDict, total=False, closed=True):  # type: ignore[call-arg
     coil_type: int
     coord_frame: int
     kind: str
-    loc: NDArray[Shape["12"], np.float64]  # type: ignore[misc]
+    loc: LocType  # type: ignore[misc]
     logno: int
     range: float
     scanno: int
